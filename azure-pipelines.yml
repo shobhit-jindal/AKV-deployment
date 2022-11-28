@@ -1,0 +1,90 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- none
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    pool:
+      vmImage: windows-latest
+
+    steps:
+    - task: CopyFiles@2
+      inputs:
+        SourceFolder: '$(agent.builddirectory)'
+        Contents: '**'
+        TargetFolder: '$(build.artifactstagingdirectory)'
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+
+- stage: Deploy
+  jobs:
+  - job: Deploy
+    pool:
+      vmImage: windows-latest
+
+    steps:
+    - task: DownloadBuildArtifacts@1
+      inputs:
+        buildType: 'current'
+        downloadType: 'single'
+        artifactName: 'drop'
+        downloadPath: '$(System.ArtifactsDirectory)'
+    
+    - task: AzureResourceManagerTemplateDeployment@3
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: 'Free Trial(b154ce63-1c54-4e89-a530-fde4493d04d7)'
+        subscriptionId: 'b154ce63-1c54-4e89-a530-fde4493d04d7'
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: 'trialrg'
+        location: 'East US'
+        templateLocation: 'Linked artifact'
+        csmFile: '$(System.ArtifactsDirectory)/drop/*/template.json'
+        csmParametersFile: '$(System.ArtifactsDirectory)/drop/*/parameters.json'
+        deploymentMode: 'Incremental'
+        
+- stage: secretDeploy
+  jobs:
+  - job: secretDeploy
+    pool:
+     vmImage: windows-latest
+    
+    steps:
+    - task: DownloadSecureFile@1
+      displayName: 'Download secure file'
+      name: downloadFile
+      inputs:
+        secureFile: 'Book1.csv'
+    - task: AzurePowerShell@5
+      inputs:
+        azureSubscription: 'Free Trial(b154ce63-1c54-4e89-a530-fde4493d04d7)'
+        ScriptType: 'InlineScript'
+        azurePowerShellVersion: 'LatestVersion'
+        Inline: |
+                  # Uninstall-AzureRM
+                  # Uninstall-Module -Name AzureRM -AllVersions
+                  # Install Module -Name Az.keyVault -Scope CurrentUser -Force
+                  Import-Csv '$(downloadFile.secureFilePath)'-Header @("Name","Number")|Select -Skip 1| Foreach-Object {
+                  $secret = (Get-AzKeyVaultSecret -VaultName "trialakvacc" -Name $_.Name).Name
+                  if ([string]::IsNullOrEmpty($secret)) {
+                  Write-Host 'do valid secret'
+                    # Write-Host $_.Number  
+                    if($_.Number -match '(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}')
+                        {
+                        # Write-Host $_.Name
+                        # Write-Host $_.Number
+                         $secretvalue = ConvertTo-SecureString $_.Number -AsPlainText -Force
+                         Set-AzKeyVaultSecret -VaultName "trialakvacc" -Name $_.Name -SecretValue $secretvalue            
+                         Write-Host 'added new one here and complete'  
+                      }
+                    }
+                  }             
